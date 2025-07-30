@@ -1,4 +1,3 @@
-// SensorPower.h
 #ifndef SENSOR_POWER_H
 #define SENSOR_POWER_H
 

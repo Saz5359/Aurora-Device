@@ -19,4 +19,4 @@ void saveDeviceState(DeviceState newState);
 void resetDeviceState();
 String getStateLabel(DeviceState state);
 
-#endif // STATE_MANAGER_H
+#endif

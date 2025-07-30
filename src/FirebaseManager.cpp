@@ -8,6 +8,7 @@
 #include "Weather.h"
 #include "SoilSensors.h"
 
+// There is already a Preferences object defined in WiFiManager.cpp so we use prefers for this file
 Preferences prefers;
 
 // Global configuration parameters
@@ -24,6 +25,7 @@ extern String growName;
 extern int monitorInterval;
 
 const String FIREBASE_URL = "https://aurora-demo-d9027-default-rtdb.firebaseio.com/";
+const String FIRESTORE_URL = "https://firestore.googleapis.com/v1/projects/aurora-demo-d9027/databases/(default)/documents";
 const String FIREBASE_AUTH = "?auth=qdvTsHBSsNwQXYzUgaU3mwFvkNvasKgej8Mk6jQ5";
 
 // NTP Client for real-time timestamps
@@ -41,6 +43,157 @@ String getTimestamp()
             ptm->tm_year + 1900, ptm->tm_mon + 1, ptm->tm_mday,
             ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
     return String(buffer);
+}
+
+void writePendingRegistrationToFirestore()
+{
+    Serial.println("📡 Checking Firebase for existing registration...");
+
+    String url = FIREBASE_URL + "devices/Aurora-" + deviceId + ".json" + FIREBASE_AUTH;
+
+    HTTPClient http;
+    http.begin(url);
+    int getCode = http.GET();
+
+    if (getCode == 200)
+    {
+        DynamicJsonDocument doc(512);
+        DeserializationError err = deserializeJson(doc, http.getString());
+
+        if (!err)
+        {
+            String status = doc["status"] | "";
+
+            if (status == "pending")
+            {
+                Serial.println("⏳ Device is already marked as pending. Skipping write.");
+                http.end();
+                return;
+            }
+            else if (status == "registered")
+            {
+                Serial.println("✅ Device is already registered. Skipping write.");
+                http.end();
+                return;
+            }
+        }
+        else
+        {
+            Serial.println("⚠️ JSON parsing failed: " + String(err.c_str()));
+        }
+    }
+    else if (getCode != 404)
+    {
+        Serial.println("⚠️ Failed to check existing registration. HTTP code: " + String(getCode));
+        http.end();
+        return;
+    }
+
+    http.end(); // Done with GET
+
+    // If device is not found (404) or has no status, attempt to write it
+    Serial.println("📡 Writing pending registration to Firebase...");
+
+    const int maxRetries = 3;
+    int attempt = 0;
+    bool success = false;
+
+    String body = "{\"status\":\"pending\",\"ts\": {\".sv\":\"timestamp\"}}";
+
+    while (attempt < maxRetries && !success)
+    {
+        http.begin(url);
+        http.addHeader("Content-Type", "application/json");
+
+        int httpCode = http.PUT(body); // Or use POST if that’s your DB structure
+        http.end();
+
+        if (httpCode == 200 || httpCode == 201)
+        {
+            Serial.println("✅ Registration request sent. Waiting for approval...");
+            success = true;
+        }
+        else
+        {
+            Serial.println("❌ Failed to write registration. Attempt " + String(attempt + 1) +
+                           " of " + String(maxRetries) + ". HTTP Code: " + String(httpCode));
+            delay(2000); // Retry delay
+            attempt++;
+        }
+    }
+
+    if (!success)
+    {
+        Serial.println("🚨 All registration attempts failed. Please check your connection.");
+    }
+}
+
+bool waitForRegistration()
+{
+    Serial.println("📡 Checking if device is registered...");
+
+    unsigned long startTime = millis();
+    const int retryDelay = 3000; // Check every 3 seconds
+
+    String url = FIREBASE_URL + "devices/Aurora-" + deviceId + ".json" + FIREBASE_AUTH;
+
+    while (millis())
+    {
+        HTTPClient http;
+        http.begin(url);
+        int code = http.GET();
+
+        if (code == 200)
+        {
+            DynamicJsonDocument doc(512);
+            DeserializationError err = deserializeJson(doc, http.getString());
+
+            if (!err)
+            {
+                String status = doc["status"] | "";
+                if (status == "registered")
+                {
+                    deviceName = doc["deviceName"] | "";
+                    userId = doc["userId"] | "";
+                    growName = doc["growName"] | "";
+
+                    // Save locally
+                    prefers.begin("deviceMeta", false);
+                    prefers.putString("userId", userId);
+                    prefers.putString("deviceName", deviceName);
+                    prefers.putString("growName", growName);
+                    prefers.end();
+
+                    Serial.println("✅ Device registered successfully!");
+                    Serial.println("🔌 Device ID: " + deviceId);
+                    Serial.println("📛 Device Name: " + deviceName);
+                    Serial.println("👤 User ID: " + userId);
+                    Serial.println("🌱 Grow Name: " + growName);
+
+                    http.end();
+                    return true;
+                }
+                else
+                {
+                    Serial.println("⌛ Status: " + status + " — Waiting for registration...  Http Code: " + String(code));
+                }
+            }
+            else
+            {
+                Serial.println("❌ JSON parsing error: " + String(err.c_str()));
+            }
+        }
+        else
+        {
+            Serial.println("❌ HTTP error while checking registration. Code: " + String(code));
+        }
+
+        http.end();
+        delay(retryDelay);
+    }
+
+    Serial.println("⏰ Timeout reached — Device was not registered.");
+    return false;
 }
 
 bool checkFirebaseConnection()
@@ -107,13 +260,13 @@ void fetchConfiguration()
         long remoteLastUpdated = doc["wifi"]["lastUpdated"].as<long>();
         long localLastUpdated = prefers.getLong("lastUpdated", 0);
 
-        if (remoteLastUpdated == localLastUpdated)
+        /* if (remoteLastUpdated == localLastUpdated)
         {
             Serial.println("⚠️ Config already up-to-date. Skipping fetch.");
             prefers.end();
             http.end();
             return;
-        }
+        } */
 
         bool configChanged = false;
 
@@ -123,11 +276,12 @@ void fetchConfiguration()
             String fetchedSSID = doc["wifi"]["ssid"].as<String>();
             String fetchedPassword = doc["wifi"]["password"].as<String>();
 
-            if (fetchedSSID != wifiSSID || fetchedPassword != wifiPassword)
+            // Wifi is not stored in plain text, so we don't compare passwords
+            if (fetchedSSID != wifiSSID /*||  fetchedPassword != wifiPassword */)
             {
                 Serial.println("✅ Wi-Fi config changed.");
                 wifiSSID = fetchedSSID;
-                wifiPassword = fetchedPassword;
+                // wifiPassword = fetchedPassword;
                 prefers.putString("wifiSSID", wifiSSID);
                 prefers.putString("wifiPassword", wifiPassword);
                 configChanged = true;
@@ -142,7 +296,7 @@ void fetchConfiguration()
 
             if (fetchedInterval != monitorInterval)
             {
-                Serial.println("✅ Monitoring interval changed.");
+                Serial.println("✅ Monitoring interval changed. " + String(fetchedInterval) + " ms" + " vs " + String(monitorInterval) + " ms");
                 monitorInterval = fetchedInterval;
                 prefers.putInt("monitorInterval", monitorInterval);
                 configChanged = true;
@@ -154,7 +308,7 @@ void fetchConfiguration()
             Serial.println("🔍 Checking device info...");
             String fetchedDeviceName = doc["device"]["deviceName"].as<String>();
             String fetchedUserId = doc["device"]["userId"].as<String>();
-            String fetchedGrow = doc["device"]["grow"].as<String>();
+            String fetchedGrow = doc["device"]["growName"].as<String>();
 
             if (fetchedDeviceName != deviceName || fetchedUserId != userId || fetchedGrow != growName)
             {
@@ -174,12 +328,15 @@ void fetchConfiguration()
             Serial.println("✅ Applying updated configuration...");
             applyConfiguration();
         }
+        else
+        {
+            Serial.println("ℹ️ No changes detected in configuration.");
+        }
 
         // Always save lastUpdated even if nothing else changed
         prefers.putLong("lastUpdated", remoteLastUpdated);
         prefers.end();
-
-        Serial.println("✅ Configuration sync complete.");
+        Serial.println("...");
     }
     else
     {
@@ -210,7 +367,7 @@ void saveDefaultConfiguration()
 
     // Firebase config
     doc["wifi"]["ssid"] = wifiSSID;
-    doc["wifi"]["password"] = wifiPassword;
+    doc["wifi"]["password"] = "HIDDEN"; // Do not store password in plain text
     doc["wifi"]["lastUpdated"] = currentTimestamp;
 
     doc["monitoring"]["interval"] = monitorInterval;
@@ -247,6 +404,7 @@ void saveDefaultConfiguration()
         prefers.end();
 
         Serial.println("📦 Local config saved (initial default).");
+        Serial.println("");
     }
     else
     {

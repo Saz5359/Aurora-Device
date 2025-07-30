@@ -23,9 +23,6 @@ extern int monitorInterval;
 
 void saveWiFiCredentials(String ssid, String password);
 void loadWiFiCredentials();
-void deleteWiFiCredentials();
-bool checkDeviceRegistration();
-void sendDeviceIdToBackend();
 void startAPMode();
 void stopAPMode();
 void handleSave();

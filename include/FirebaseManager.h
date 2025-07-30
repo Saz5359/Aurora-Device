@@ -12,8 +12,10 @@ extern String deviceId;
 
 bool checkFirebaseConnection();
 void fetchConfiguration();
+void writePendingRegistrationToFirestore();
+bool waitForRegistration();
 void saveDefaultConfiguration();
 void applyConfiguration();
 void sendMonitoringData();
 
-#endif // FIREBASE_MANAGER_H
+#endif

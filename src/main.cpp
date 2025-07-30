@@ -9,14 +9,28 @@
 // Define the DHT object here
 #define DHT_PIN 4      // DHT sensor pin (change if necessary)
 #define DHT_TYPE DHT22 // DHT sensor type (change if necessary)
+// #define RESET_TRIGGER_PIN 13 // Reset trigger pin
+
+Preferences pref;
 // DHT dht(DHT_PIN, DHT_TYPE); // Initialize the DHT sensor object
 
 unsigned long lastSensorReadTime = 0;
-unsigned long sensorReadInterval = 20000; // 30 seconds
 
 void setup()
 {
   Serial.begin(115200);
+  // pinMode(RESET_TRIGGER_PIN, INPUT_PULLUP);
+
+  Preferences configPrefs;
+  configPrefs.begin("deviceConfig", true); // read‐only
+  monitorInterval = configPrefs.getInt("monitorInterval", monitorInterval);
+  deviceName = configPrefs.getString("deviceName", deviceName);
+  userId = configPrefs.getString("userId", userId);
+  growName = configPrefs.getString("growName", growName);
+  Serial.println("📦 Loaded device configuration:");
+  configPrefs.end();
+  Serial.println("🕑 Loaded monitorInterval: " + String(monitorInterval) + " ms");
+
   loadDeviceState(); // 🔁 Load last saved lifecycle state
   // factoryResetDevice();
   loadWiFiCredentials(); // 📡 Load saved SSID/password
@@ -38,11 +52,12 @@ void setup()
     {
       turnOnSensors(); // Only power up if we're WiFi ready
 
-      isRegistered = checkDeviceRegistration();
-      if (!isRegistered)
+      writePendingRegistrationToFirestore(); // Request registration first
+      isRegistered = waitForRegistration();  // Then wait
+      if (isRegistered)
       {
-        sendDeviceIdToBackend();
-        // stay in this state until registration is confirmed
+        saveDeviceState(STATE_REGISTERED);
+        ESP.restart();
       }
       else
       {
@@ -95,11 +110,26 @@ void loop()
 {
   server.handleClient();
 
+  /*   if (digitalRead(RESET_TRIGGER_PIN) == LOW)
+    {
+      Serial.println("🧹 Reset pin LOW. Waiting to confirm...");
+      delay(1000); // Wait a second to confirm it's not accidental
+      if (digitalRead(RESET_TRIGGER_PIN) == LOW)
+      {
+        Serial.println("✅ Confirmed. Performing factory reset...");
+        // factoryResetDevice();
+      }
+      else
+      {
+        Serial.println("⚠️ Reset cancelled (pin went HIGH again).");
+      }
+    } */
+
   // Periodic registration checks only when connected to WiFi
   if (WiFi.status() == WL_CONNECTED && currentState == STATE_WIFI_CONNECTED && millis() - lastCheckTime > checkInterval)
   {
     lastCheckTime = millis();
-    isRegistered = checkDeviceRegistration();
+    isRegistered = waitForRegistration();
     if (isRegistered)
     {
       saveDeviceState(STATE_REGISTERED); // 👉 Advance
@@ -110,7 +140,7 @@ void loop()
   if (currentState == STATE_MONITORING_READY && WiFi.status() == WL_CONNECTED)
   {
     unsigned long now = millis();
-    if (now - lastSensorReadTime >= sensorReadInterval)
+    if (now - lastSensorReadTime >= monitorInterval)
     {
       lastSensorReadTime = now;
       readWeatherData();

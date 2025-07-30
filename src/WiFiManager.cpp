@@ -34,60 +34,6 @@ void loadWiFiCredentials()
     Serial.println("📥 Loaded SSID: " + wifiSSID);
 }
 
-bool checkDeviceRegistration()
-{
-    HTTPClient http;
-    String url = "http://192.168.8.101:5000/api/devices/check/" + deviceId; // deviceId = just raw MAC suffix
-    Serial.println("📡 Checking if device is registered...");
-
-    http.begin(url);
-    int httpCode = http.GET();
-
-    if (httpCode == 200)
-    {
-        String payload = http.getString();
-        Serial.println("✅ Device is registered!");
-
-        DynamicJsonDocument doc(512); // Increase size slightly for safety
-        DeserializationError error = deserializeJson(doc, payload);
-        if (error)
-        {
-            Serial.println("❌ Failed to parse JSON.");
-            http.end();
-            return false;
-        }
-
-        // Extract the returned values
-        String returnedDeviceId = doc["deviceId"].as<String>();
-        deviceName = doc["deviceName"].as<String>();
-        userId = doc["userId"].as<String>();
-        growName = doc["growName"].as<String>();
-
-        preferences.begin("deviceMeta", false);
-        preferences.putString("userId", userId);
-        preferences.putString("deviceName", deviceName);
-        preferences.putString("growName", growName);
-        preferences.end();
-
-        Serial.println("🔁 [Registration Info]");
-        Serial.println("🔌 Device ID: " + returnedDeviceId);
-        Serial.println("📛 Device Name: " + deviceName);
-        Serial.println("👤 User ID: " + userId);
-        Serial.println("🌱 Grow Name: " + growName);
-
-        http.end();
-        return true;
-    }
-    else
-    {
-        Serial.print("❌ Device not registered. HTTP Code: ");
-        Serial.println(httpCode);
-    }
-
-    http.end();
-    return false;
-}
-
 void factoryResetDevice()
 {
     Serial.println("🧹 Performing full factory reset...");
@@ -113,25 +59,6 @@ void factoryResetDevice()
     ESP.restart();
 }
 
-void sendDeviceIdToBackend()
-{
-    HTTPClient http;
-    http.begin("http://192.168.8.101:5000/api/devices/register");
-    http.addHeader("Content-Type", "application/json");
-    String payload = "{\"deviceId\": \"" + deviceId + "\"}";
-    int httpCode = http.POST(payload);
-    if (httpCode > 0)
-    {
-        Serial.println("✅ Registration request sent.");
-        deviceIdSent = true;
-    }
-    else
-    {
-        Serial.println("❌ Registration failed. HTTP Code: " + String(httpCode));
-    }
-    http.end();
-}
-
 void startAPMode()
 {
     Serial.println("⚡ Starting Access Point Mode...");
@@ -153,8 +80,8 @@ void handleSave()
         String password = server.arg("password");
 
         Serial.println("📶 Received WiFi credentials:");
-        Serial.println("SSID: [Hidden]");
-        Serial.println("Password: " + password);
+        Serial.println("SSID: " + ssid);
+        Serial.println("Password: [Hidden]");
 
         WiFi.begin(ssid.c_str(), password.c_str());
 
