@@ -62,8 +62,8 @@ void factoryResetDevice()
 void startAPMode()
 {
     Serial.println("⚡ Starting Access Point Mode...");
-    WiFi.softAP("Aurora-Setup", "12345678");
-    Serial.println("🌐 AP Mode: Connect to 'Aurora-Setup' to configure WiFi.");
+    WiFi.softAP("Aurora-Setup" /* + deviceId.substring(5, 10) */, "12345678");
+    Serial.println("🌐 AP Mode: Connect to 'Aurora-Setup"/* +  deviceId.substring(5, 10) +  */" to configure WiFi.");
 }
 
 void stopAPMode()

@@ -347,6 +347,64 @@ void fetchConfiguration()
     http.end();
 }
 
+void checkForUpdates()
+{
+    Serial.println("📡 Checking for firmware updates...");
+    String url = FIREBASE_URL + "Aurora-device-OTA.json" + FIREBASE_AUTH;
+
+    HTTPClient http;
+    http.begin(url);
+    int httpResponseCode = http.GET();
+
+    if (httpResponseCode == 200)
+    {
+        String payload = http.getString();
+
+        // Parse JSON
+        StaticJsonDocument<512> doc;
+        DeserializationError error = deserializeJson(doc, payload);
+
+        if (error)
+        {
+            Serial.print("JSON parse failed: ");
+            Serial.println(error.c_str());
+            http.end();
+            return;
+        }
+
+        String latestVersion = doc["latestVersion"].as<String>();
+        String firmwareUrl = doc["url"].as<String>();
+
+        latestVersion.trim();
+        firmwareUrl.trim();
+
+        prefers.begin("firmware", true); // Read-only mode
+        String currentVersion = prefers.getString("firmwareVersion", "0.0.0");
+        prefers.end();
+
+        Serial.println("Latest Version: " + latestVersion);
+        Serial.println("Firmware URL: " + firmwareUrl);
+        Serial.println("Current Version: " + currentVersion);
+
+        if (latestVersion != currentVersion && firmwareUrl.length() > 0)
+        {
+            Serial.println("🚀 New version found! Updating...");
+            performOTA(latestVersion, firmwareUrl); // Pass the URL directly to OTA
+        }
+        else
+        {
+            Serial.println("✅ Device is up to date.");
+        }
+    }
+    else
+    {
+        Serial.println("❌ Error fetching latest version: " + String(httpResponseCode));
+    }
+    Serial.println("...");
+
+    http.end();
+}
+
 void saveDefaultConfiguration()
 {
     Serial.println("...");
@@ -412,6 +470,124 @@ void saveDefaultConfiguration()
     }
 
     http.end();
+}
+
+void performOTA(String newVersion, String firmwareUrl)
+{
+    Serial.println("🔄 Performing OTA update to version: " + newVersion);
+
+    WiFiClientSecure client;
+    client.setInsecure(); // Ignore SSL cert validation
+
+    HTTPClient https;
+
+    String currentUrl = firmwareUrl;
+    bool redirected = false;
+    int maxRedirects = 5; // avoid infinite redirect loops
+
+    for (int redirectCount = 0; redirectCount < maxRedirects; redirectCount++)
+    {
+        if (!https.begin(client, currentUrl))
+        {
+            Serial.println("❌ Unable to start OTA request for URL: " + currentUrl);
+            return;
+        }
+
+        int httpCode = https.GET();
+
+        if (httpCode == HTTP_CODE_OK) // 200
+        {
+            // Got the file, break loop to proceed
+            redirected = false;
+            break;
+        }
+        else if (httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND) // 301 or 302
+        {
+            String redirectUrl = https.getLocation();
+            Serial.println("🔀 Redirected to: " + redirectUrl);
+            https.end();
+
+            if (redirectUrl.length() == 0)
+            {
+                Serial.println("❌ Redirect location header missing");
+                return;
+            }
+            currentUrl = redirectUrl; // Follow this URL next iteration
+            redirected = true;
+        }
+        else
+        {
+            Serial.println("❌ HTTP error during OTA: " + String(httpCode));
+            https.end();
+            return;
+        }
+
+        https.end();
+    }
+
+    if (redirected)
+    {
+        Serial.println("❌ Too many redirects, aborting OTA");
+        return;
+    }
+
+    int contentLength = https.getSize();
+
+    if (contentLength > 0)
+    {
+        Serial.println("📦 Content-Length: " + String(contentLength));
+        if (!Update.begin(contentLength))
+        {
+            Serial.println("❌ Not enough space for OTA update");
+            https.end();
+            return;
+        }
+    }
+    else
+    {
+        Serial.println("⚠️ No Content-Length, using max OTA size...");
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) // allow streaming unknown size
+        {
+            Serial.println("❌ Not enough space for OTA update");
+            https.end();
+            return;
+        }
+    }
+
+    WiFiClient *stream = https.getStreamPtr();
+    size_t written = Update.writeStream(*stream);
+
+    if (written > 0)
+    {
+        Serial.println("✅ OTA update written: " + String(written) + " bytes");
+    }
+    else
+    {
+        Serial.println("❌ OTA write failed, nothing written");
+    }
+
+    if (Update.end())
+    {
+        if (Update.isFinished())
+        {
+            Serial.println("✅ OTA update finished, restarting...");
+            prefers.begin("firmware", false); // RW mode
+            prefers.putString("firmwareVersion", newVersion);
+            Serial.println("🔹 Firmware version updated to: " + prefers.getString("firmwareVersion", "0.0.0"));
+            prefers.end();
+            ESP.restart();
+        }
+        else
+        {
+            Serial.println("❌ OTA update not finished properly");
+        }
+    }
+    else
+    {
+        Serial.printf("❌ OTA end error: %u\n", Update.getError());
+    }
+
+    https.end();
 }
 
 void applyConfiguration()

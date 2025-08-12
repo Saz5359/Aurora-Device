@@ -16,7 +16,7 @@ Preferences pref;
 
 unsigned long lastSensorReadTime = 0;
 
-void setup()
+void setup() // edit firebase library
 {
   Serial.begin(115200);
   // pinMode(RESET_TRIGGER_PIN, INPUT_PULLUP);
@@ -87,6 +87,7 @@ void setup()
     if (connectToWiFi() && checkFirebaseConnection())
     {
       fetchConfiguration(); // Config from cloud
+      checkForUpdates();    // Check for OTA updates
       initWeatherSensor();
       initSoilSensor();
     }
